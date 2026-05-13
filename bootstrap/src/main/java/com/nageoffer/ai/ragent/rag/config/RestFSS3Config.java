@@ -18,6 +18,7 @@
 package com.nageoffer.ai.ragent.rag.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -32,8 +33,12 @@ import java.net.URI;
 /**
  * RustFS S3 客户端配置类
  * 用于配置和初始化与 RustFS 对象存储服务交互的 S3 客户端
+ * 
+ * @deprecated 已迁移到 MinIO，此类保留仅供兼容。当 application.yml 中配置 rustfs.url 时才会生效。
  */
 @Configuration
+@ConditionalOnProperty(prefix = "rustfs", name = "url")
+@Deprecated
 public class RestFSS3Config {
 
     @Bean

@@ -74,7 +74,7 @@ public abstract class AbstractOpenAIStyleEmbeddingClient implements EmbeddingCli
      * 单次请求最大批量大小，0 表示不限制
      */
     protected int maxBatchSize() {
-        return 0;
+        return 10;
     }
 
     // ==================== 接口实现 ====================
@@ -113,80 +113,187 @@ public abstract class AbstractOpenAIStyleEmbeddingClient implements EmbeddingCli
      * 构建请求、发送 HTTP、解析 OpenAI 格式响应
      */
     protected List<List<Float>> doEmbed(List<String> texts, ModelTarget target) {
+//        AIModelProperties.ProviderConfig provider = HttpResponseHelper.requireProvider(target, provider());
+//        if (requiresApiKey()) {
+//            HttpResponseHelper.requireApiKey(provider, provider());
+//        }
+//
+//        String url = ModelUrlResolver.resolveUrl(provider, target.candidate(), ModelCapability.EMBEDDING);
+//        log.info("embedding url: {}", url);
+//        JsonObject body = new JsonObject();
+//        body.addProperty("model", HttpResponseHelper.requireModel(target, provider()));
+//        JsonArray inputArray = new JsonArray();
+//        for (String text : texts) {
+//            inputArray.add(text);
+//        }
+//        body.add("input", inputArray);
+//        body.addProperty("dimensions", target.candidate().getDimension());
+//        customizeRequestBody(body, target);
+//
+//        Request.Builder requestBuilder = new Request.Builder()
+//                .url(url)
+//                .post(RequestBody.create(body.toString(), HttpMediaTypes.JSON));
+//        if (requiresApiKey()) {
+//            requestBuilder.addHeader("Authorization", "Bearer " + provider.getApiKey());
+//        }
+//        Request request = requestBuilder.build();
+//
+//        JsonObject json;
+//        try (Response response = httpClient.newCall(request).execute()) {
+//            if (!response.isSuccessful()) {
+//                String errBody = HttpResponseHelper.readBody(response.body());
+//                log.warn("{} embedding 请求失败: status={}, body={}", provider(), response.code(), errBody);
+//                throw new ModelClientException(
+//                        provider() + " embedding 请求失败: HTTP " + response.code(),
+//                        ModelClientErrorType.fromHttpStatus(response.code()),
+//                        response.code()
+//                );
+//            }
+//            json = HttpResponseHelper.parseJson(response.body(), provider());
+//        } catch (IOException e) {
+//            throw new ModelClientException(
+//                    provider() + " embedding 请求失败: " + e.getMessage(),
+//                    ModelClientErrorType.NETWORK_ERROR, null, e);
+//        }
+//
+//        if (json.has("error")) {
+//            JsonObject err = json.getAsJsonObject("error");
+//            String code = err.has("code") ? err.get("code").getAsString() : "unknown";
+//            String msg = err.has("message") ? err.get("message").getAsString() : "unknown";
+//            throw new ModelClientException(
+//                    provider() + " embedding 错误: " + code + " - " + msg,
+//                    ModelClientErrorType.PROVIDER_ERROR, null);
+//        }
+//
+//        JsonArray data = json.getAsJsonArray("data");
+//        if (data == null || data.isEmpty()) {
+//            throw new ModelClientException(
+//                    provider() + " embedding 响应中缺少 data 数组",
+//                    ModelClientErrorType.INVALID_RESPONSE, null);
+//        }
+//
+//        List<List<Float>> results = new ArrayList<>(data.size());
+//        for (JsonElement el : data) {
+//            JsonObject obj = el.getAsJsonObject();
+//            JsonArray emb = obj.getAsJsonArray("embedding");
+//            if (emb == null || emb.isEmpty()) {
+//                throw new ModelClientException(
+//                        provider() + " embedding 响应中缺少 embedding 字段",
+//                        ModelClientErrorType.INVALID_RESPONSE, null);
+//            }
+//            List<Float> vector = new ArrayList<>(emb.size());
+//            for (JsonElement v : emb) {
+//                vector.add(v.getAsFloat());
+//            }
+//            results.add(vector);
+//        }
+//
+//        return results;
+
+        // 适配阿里百炼 DashScope compatible-mode /v1/embeddings 协议
         AIModelProperties.ProviderConfig provider = HttpResponseHelper.requireProvider(target, provider());
         if (requiresApiKey()) {
             HttpResponseHelper.requireApiKey(provider, provider());
         }
 
         String url = ModelUrlResolver.resolveUrl(provider, target.candidate(), ModelCapability.EMBEDDING);
-
-        JsonObject body = new JsonObject();
-        body.addProperty("model", HttpResponseHelper.requireModel(target, provider()));
+        log.info("embedding url: {}", url);
+        List<List<Float>> results = new ArrayList<>();
         JsonArray inputArray = new JsonArray();
-        for (String text : texts) {
-            inputArray.add(text);
-        }
-        body.add("input", inputArray);
-        body.addProperty("dimensions", target.candidate().getDimension());
-        customizeRequestBody(body, target);
+        for (int i = 0; i < texts.size(); i++){
+            inputArray.add(texts.get(i));
+            if(inputArray.size() >= maxBatchSize()||i==texts.size()-1){
+                // 构建请求体
+                JsonObject body = new JsonObject();
+                body.addProperty("model", HttpResponseHelper.requireModel(target, provider()));
 
-        Request.Builder requestBuilder = new Request.Builder()
-                .url(url)
-                .post(RequestBody.create(body.toString(), HttpMediaTypes.JSON));
-        if (requiresApiKey()) {
-            requestBuilder.addHeader("Authorization", "Bearer " + provider.getApiKey());
-        }
-        Request request = requestBuilder.build();
+                // 百炼 compatible-mode 的 input 字段支持 string 或 string[]
 
-        JsonObject json;
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                String errBody = HttpResponseHelper.readBody(response.body());
-                log.warn("{} embedding 请求失败: status={}, body={}", provider(), response.code(), errBody);
-                throw new ModelClientException(
-                        provider() + " embedding 请求失败: HTTP " + response.code(),
-                        ModelClientErrorType.fromHttpStatus(response.code()),
-                        response.code()
-                );
+                body.add("input", inputArray);
+
+                // 仅在 dimension 为有效正整数时才添加 dimensions 参数
+                // 百炼 text-embedding-v4 默认输出 1024 维，支持通过 dimensions 降维至 768、512 等
+                // 若不传 dimensions 则使用模型默认维度
+                Integer dimension = target.candidate().getDimension();
+                if (dimension != null && dimension > 0) {
+                    body.addProperty("dimensions", dimension);
+                    log.debug("embedding dimensions: {}", dimension);
+                }
+
+                // 子类自定义请求体（如 encoding_format 等）
+                customizeRequestBody(body, target);
+
+                log.debug("embedding request body: {}", body);
+
+                // 构建请求
+                Request.Builder requestBuilder = new Request.Builder()
+                        .url(url)
+                        .post(RequestBody.create(body.toString(), HttpMediaTypes.JSON));
+                if (requiresApiKey()) {
+                    requestBuilder.addHeader("Authorization", "Bearer " + provider.getApiKey());
+                }
+                Request request = requestBuilder.build();
+
+                // 发送请求并解析响应
+                JsonObject json;
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (!response.isSuccessful()) {
+                        String errBody = HttpResponseHelper.readBody(response.body());
+                        log.warn("{} embedding 请求失败: status={}, body={}", provider(), response.code(), errBody);
+                        throw new ModelClientException(
+                                provider() + " embedding 请求失败: HTTP " + response.code(),
+                                ModelClientErrorType.fromHttpStatus(response.code()),
+                                response.code()
+                        );
+                    }
+                    json = HttpResponseHelper.parseJson(response.body(), provider());
+                } catch (IOException e) {
+                    throw new ModelClientException(
+                            provider() + " embedding 请求失败: " + e.getMessage(),
+                            ModelClientErrorType.NETWORK_ERROR, null, e);
+                }
+
+                // 检查百炼返回的错误信息
+                if (json.has("error")) {
+                    JsonObject err = json.getAsJsonObject("error");
+                    String code = err.has("code") ? err.get("code").getAsString() : "unknown";
+                    String msg = err.has("message") ? err.get("message").getAsString() : "unknown";
+                    throw new ModelClientException(
+                            provider() + " embedding 错误: " + code + " - " + msg,
+                            ModelClientErrorType.PROVIDER_ERROR, null);
+                }
+
+                // 解析 embedding 向量
+                JsonArray data = json.getAsJsonArray("data");
+                if (data == null || data.isEmpty()) {
+                    throw new ModelClientException(
+                            provider() + " embedding 响应中缺少 data 数组",
+                            ModelClientErrorType.INVALID_RESPONSE, null);
+                }
+
+                List<List<Float>> results1 = new ArrayList<>();
+                for (JsonElement el : data) {
+                    JsonObject obj = el.getAsJsonObject();
+                    JsonArray emb = obj.getAsJsonArray("embedding");
+                    if (emb == null || emb.isEmpty()) {
+                        throw new ModelClientException(
+                                provider() + " embedding 响应中缺少 embedding 字段",
+                                ModelClientErrorType.INVALID_RESPONSE, null);
+                    }
+                    List<Float> vector = new ArrayList<>(emb.size());
+                    for (JsonElement v : emb) {
+                        vector.add(v.getAsFloat());
+                    }
+                    results.add(vector);
+                }
+
+                log.info("embedding 响应向量数: {}, 首条维度: {}",
+                        results.size(), results.isEmpty() ? 0 : results.get(0).size());
+                results.addAll(results1);
+                inputArray=new JsonArray();
             }
-            json = HttpResponseHelper.parseJson(response.body(), provider());
-        } catch (IOException e) {
-            throw new ModelClientException(
-                    provider() + " embedding 请求失败: " + e.getMessage(),
-                    ModelClientErrorType.NETWORK_ERROR, null, e);
         }
 
-        if (json.has("error")) {
-            JsonObject err = json.getAsJsonObject("error");
-            String code = err.has("code") ? err.get("code").getAsString() : "unknown";
-            String msg = err.has("message") ? err.get("message").getAsString() : "unknown";
-            throw new ModelClientException(
-                    provider() + " embedding 错误: " + code + " - " + msg,
-                    ModelClientErrorType.PROVIDER_ERROR, null);
-        }
-
-        JsonArray data = json.getAsJsonArray("data");
-        if (data == null || data.isEmpty()) {
-            throw new ModelClientException(
-                    provider() + " embedding 响应中缺少 data 数组",
-                    ModelClientErrorType.INVALID_RESPONSE, null);
-        }
-
-        List<List<Float>> results = new ArrayList<>(data.size());
-        for (JsonElement el : data) {
-            JsonObject obj = el.getAsJsonObject();
-            JsonArray emb = obj.getAsJsonArray("embedding");
-            if (emb == null || emb.isEmpty()) {
-                throw new ModelClientException(
-                        provider() + " embedding 响应中缺少 embedding 字段",
-                        ModelClientErrorType.INVALID_RESPONSE, null);
-            }
-            List<Float> vector = new ArrayList<>(emb.size());
-            for (JsonElement v : emb) {
-                vector.add(v.getAsFloat());
-            }
-            results.add(vector);
-        }
 
         return results;
     }

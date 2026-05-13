@@ -96,7 +96,8 @@ public class RoutingEmbeddingService implements EmbeddingService {
     }
 
     private EmbeddingClient resolveClient(ModelTarget target) {
-        return clientsByProvider.get(target.candidate().getProvider());
+        EmbeddingClient embeddingClient = clientsByProvider.get(target.candidate().getProvider());
+        return embeddingClient;
     }
 
     private ModelTarget resolveTarget(String modelId) {
