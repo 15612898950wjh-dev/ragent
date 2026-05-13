@@ -38,14 +38,15 @@ import com.nageoffer.ai.ragent.rag.core.vector.VectorSpaceId;
 import com.nageoffer.ai.ragent.rag.core.vector.VectorSpaceSpec;
 import com.nageoffer.ai.ragent.rag.core.vector.VectorStoreAdmin;
 import com.nageoffer.ai.ragent.knowledge.service.KnowledgeBaseService;
+import io.minio.BucketExistsArgs;
+import io.minio.MakeBucketArgs;
+import io.minio.MinioClient;
+import io.minio.errors.ErrorResponseException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.BucketAlreadyExistsException;
-import software.amazon.awssdk.services.s3.model.BucketAlreadyOwnedByYouException;
 
 import java.util.HashMap;
 import java.util.List;
@@ -61,7 +62,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     private final KnowledgeBaseMapper knowledgeBaseMapper;
     private final KnowledgeDocumentMapper knowledgeDocumentMapper;
     private final VectorStoreAdmin vectorStoreAdmin;
-    private final S3Client s3Client;
+    private final MinioClient minioClient;
 
     @Transactional
     @Override
@@ -90,15 +91,23 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
 
         String bucketName = requestParam.getCollectionName();
         try {
-            s3Client.createBucket(builder -> builder.bucket(bucketName));
-            log.info("成功创建RestFS存储桶，Bucket名称: {}", bucketName);
-        } catch (BucketAlreadyOwnedByYouException | BucketAlreadyExistsException e) {
-            if (e instanceof BucketAlreadyOwnedByYouException) {
-                log.error("RestFS存储桶已存在，Bucket名称: {}", bucketName, e);
-            } else {
-                log.error("RestFS存储桶已存在但由其他账户拥有，Bucket名称: {}", bucketName, e);
+            boolean exists = minioClient.bucketExists(BucketExistsArgs.builder()
+                    .bucket(bucketName)
+                    .build());
+            if (exists) {
+                log.error("MinIO存储桶已存在，Bucket名称: {}", bucketName);
+                throw new ServiceException("存储桶名称已被占用：" + bucketName);
             }
-            throw new ServiceException("存储桶名称已被占用：" + bucketName);
+            minioClient.makeBucket(MakeBucketArgs.builder()
+                    .bucket(bucketName)
+                    .build());
+            log.info("成功创建MinIO存储桶，Bucket名称: {}", bucketName);
+        } catch (ErrorResponseException e) {
+            log.error("MinIO存储桶操作失败，Bucket名称: " + bucketName, e);
+            throw new ServiceException("存储桶创建失败：" + bucketName);
+        } catch (Exception e) {
+            log.error("MinIO存储桶操作异常，Bucket名称: " + bucketName, e);
+            throw new ServiceException("存储桶创建失败：" + bucketName);
         }
 
         VectorSpaceSpec spaceSpec = VectorSpaceSpec.builder()

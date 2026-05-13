@@ -200,3 +200,8 @@ sa-token:
 
 app:
   demo-mode: false
+
+logging:
+  level:
+    org.apache.fontbox.ttf.TTFParser: ERROR
+    org.apache.pdfbox.pdmodel.font.FileSystemFontProvider: ERROR
